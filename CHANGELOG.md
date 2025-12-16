@@ -6,10 +6,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Changed
-- Updated to wf-template v5.6.3 to maintain compliance with our latest wf-template standard, changing:
+- Updated to wf-template v5.7.0 to maintain compliance with our latest wf-template standard, changing:
   - Pipeline overview now appears before pipeline parameters in README.
   - ezCharts plotting library has been updated to 0.15.1, there are no user facing changes to plots.
   - Fastcat FASTQ pre-processing program has been updated to 0.24.2, it is more robust to malformed FASTQ input.
+  - CHANGELOG to be compliant with our formatting rules.
 
 ## [v3.3.3]
 ### Fixed
@@ -118,7 +119,7 @@ This major version release adds an experimental SNV calling workflow, enabled wi
 - Barcode statistics output file.
 
 ## [v2.3.0]
-### Fix
+### Fixed
 - Output schema with correct expression matrix paths.
 ### Added
 - Spatial plotting of visium data in workflow report for genes specified by `--genes_of_interest`.
@@ -210,7 +211,7 @@ This major version release adds an experimental SNV calling workflow, enabled wi
 - Publish stringtie transcriptome fasta and GFF files to output dir.
 ### Fixed
 - More informative error message upon read duplicate detection.
-### Updated
+### Changed
 - Remove duplicate fastcat call.
 
 ## [v1.0.2]
@@ -222,7 +223,7 @@ This major version release adds an experimental SNV calling workflow, enabled wi
 - `<img>` tags in the docs.
 
 ## [v1.0.0]
-### Updated
+### Changed
 - Docs to the new format.
 
 ## [v0.3.0]
@@ -233,6 +234,7 @@ This major version release adds an experimental SNV calling workflow, enabled wi
 -`exp_cells` to `expected_cells` in single_cell_sample_sheet to be consistent with CLI option.
 
 ## [v0.2.9]
+### Changed
 - Make `prepare_report_data` process more memory-efficient
 
 ## [v0.2.8]
