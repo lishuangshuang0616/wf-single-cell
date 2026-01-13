@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ezCharts plotting library has been updated to 0.15.1, there are no user facing changes to plots.
   - Fastcat FASTQ pre-processing program has been updated to 0.24.2, it is more robust to malformed FASTQ input.
   - CHANGELOG to be compliant with our formatting rules.
+### Fixed
+- Processed BAMs and read summary output files, from visium HD data, now include read quality strings.
 
 ## [v3.3.3]
 ### Fixed

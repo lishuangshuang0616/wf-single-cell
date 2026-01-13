@@ -114,7 +114,6 @@ process parse_sr_bam {
               emit: barcode_counts
     script:
     """
-    # If we want qual (UY, UB) these must be quoted
     workflow-glue tags_from_bam \
         spaceranger.bam \
         spaceranger_tags.tsv \
@@ -240,21 +239,23 @@ process combine_mapping_and_demux_tags {
     rm -rf ${tmpdir}/*
     
     # Join tags and split by chromosome
-    # TODO: just do the splitting in the Python script?
     mkdir -p chr_tags
     workflow-glue join_tags map.tsv demux.tsv | \\
-        csvtk split \\
-            --num-cpus ${task.cpus} \\
-            --tabs \\
-            --fields chr \\
-            --out-file chr_tags
+        awk -F'\\t' '
+            NR==1 { 
+                header=\$0
+                for(i=1;i<=NF;i++) if(\$i=="chr") chr_col=i
+                if(!chr_col) { print "Error: chr column not found" > "/dev/stderr"; exit 1 }
+                next
+            }
+            {
+                chr = \$chr_col
+                out = "chr_tags/" chr ".tsv"
+                if(!(seen[chr]++)) print header > out
+                print >> out
+            }
+        '
     rm -f map.tsv demux.tsv
-
-    # Clean up filenames: remove 'stdin-' prefix from each output
-    shopt -s nullglob
-    for f in chr_tags/stdin-*.tsv; do
-        mv "\$f" "chr_tags/\${f##*/stdin-}"
-    done
     
     # Find the column number for 'CB'
     A_FILE=\$(find chr_tags -type f -name '*.tsv' | head -n 1)
