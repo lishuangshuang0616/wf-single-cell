@@ -39,6 +39,7 @@ docker-run:
           "bam-input",
           "visium",
           "visium_hd",
+          "compressed_reference_visium_hd",
           "SNV",
           "fusion",
           "fusion_cloud_resource",
@@ -196,6 +197,25 @@ docker-run:
             --adapter_stats ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/configs.json
             --kit visium_hd:v1
             --ref_genome_dir ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/refdata-gex-GRCm39-2024-A_chr10
+            --matrix_min_genes 1 --matrix_min_cells 1 --matrix_max_mito 100
+            --genes_of_interest ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/goi.tsv
+          NF_IGNORE_PROCESSES: "get_ctat_data,get_10x_data,uncompress_ref"
+      - if: $MATRIX_NAME == "compressed_reference_visium_hd"
+        variables:
+          NF_BEFORE_SCRIPT: >
+            mkdir -p ${CI_PROJECT_NAME}/data/ &&
+            wget https://ont-exd-int-s3-euwst1-epi2me-labs.s3.amazonaws.com/wf-single-cell/visium_hd_wai5VuBb.tar.gz
+              -O ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb.tar.gz &&
+              tar -xzvf ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb.tar.gz -C ${CI_PROJECT_NAME}/data/
+          NF_WORKFLOW_OPTS: > 
+            -executor.\$$local.memory 64GB
+            --threads 4 
+            --wf.merge_threads=4 
+            --bam ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/long_read_bams
+            --spaceranger_bam ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/spaceranger_bams
+            --adapter_stats ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/configs.json
+            --kit visium_hd:v1
+            --ref_genome_dir ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/refdata-gex-GRCm39-2024-A_chr10_compressed
             --matrix_min_genes 1 --matrix_min_cells 1 --matrix_max_mito 100
             --genes_of_interest ${CI_PROJECT_NAME}/data/visium_hd_wai5VuBb/goi.tsv
           NF_IGNORE_PROCESSES: "get_ctat_data,get_10x_data,uncompress_ref"

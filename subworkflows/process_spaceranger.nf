@@ -1,19 +1,9 @@
-include { call_paftools; build_minimap_index} from '../modules/local/common'
+include { 
+    call_paftools; 
+    build_minimap_index; 
+    split_gtf_by_chroms
+} from '../modules/local/common'
 
-// Move to common
-process split_gtf_by_chroms {
-    label "singlecell"
-    cpus 1
-    memory "1 GB"
-    input:
-        path("ref.gtf")
-    output:
-        path("*"), emit: chrom_gtf
-    script:
-    """
-    gawk '/^[^#]/ {print>\$1".gtf"}' ref.gtf
-    """
-}
 
 process get_bam_chrs {
     label "singlecell"

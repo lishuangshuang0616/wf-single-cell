@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fastcat FASTQ pre-processing program has been updated to 0.24.2, it is more robust to malformed FASTQ input.
   - CHANGELOG to be compliant with our formatting rules.
 ### Fixed
+- The visium HD workflow now accepts gzip compressed reference annotation files.
 - Processed BAMs and read summary output files, from visium HD data, now include read quality strings.
 
 ## [v3.3.3]

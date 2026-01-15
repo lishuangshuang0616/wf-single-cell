@@ -100,3 +100,22 @@ process cat_tags_by_chrom {
     done
     """
 }
+
+process split_gtf_by_chroms {
+    label "singlecell"
+    cpus 1
+    memory "1 GB"
+    input:
+        path(ref_gtf)
+    output:
+        path("*.gtf"), emit: chrom_gtf
+    script:
+    """
+    if [[ "${ref_gtf}" == *.gz ]]; then
+        cat_cmd="zcat" 
+    else
+        cat_cmd="cat"
+    fi
+    \${cat_cmd} ${ref_gtf} | awk '/^[^#]/ {print>\$1".gtf"}'
+    """
+}
