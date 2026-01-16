@@ -69,35 +69,53 @@ process call_paftools {
 process cat_tags_by_chrom {
     // Merge per-chunk tags to create per-chromosome tags
     label "wf_common"
-    cpus params.threads
-    memory "8 GB"
+    cpus 4
+    memory "12 GB"
     input:
         tuple val(meta),
               path('tags/*tags.tsv')
     output:
-         tuple val(meta),
+        tuple val(meta),
               path("chr_tags/*"),
-              emit: merged_tags
-
+              emit: tags
+        
     script:
+        def tmpdir = "tmpdir"
+        def buffer_size = "8192M"
+        def sort_threads = 4
     """
-    mkdir chr_tags
-    # Find the chr column number
-    files=(tags/*)
-    chr_col=\$(awk -v RS='\t' '/chr/{print NR; exit}' "\${files[0]}")
+    mkdir -p chr_tags
+    files=(\$(find -L tags -name "*.tsv" -type f))
+    
+    # Find the chr and CB column indices
+    CHR_COL=\$(awk -F'\t' 'NR==1 {for (i=1; i<=NF; i++) if (\$i == "chr") print i; exit}' "\${files[0]}")
+    CB_COL=\$(awk -F'\t' 'NR==1 {for (i=1; i<=NF; i++) if (\$i == "CB") print i; exit}' "\${files[0]}")
 
-    # merge the tags TSVs, keep header from first file and split entries by chromosome
-    awk -F'\t' -v chr_col=\$chr_col 'FNR==1{hdr=\$0; next} \
-    {if (!seen[\$chr_col]++) \
-        print hdr>"chr_tags/"\$chr_col".tsv"; \
-        print>"chr_tags/"\$chr_col".tsv"}' tags/*
+    [ -z "\$CHR_COL" ] && echo "Error: 'chr' column not found in tags file" && exit 1
+    [ -z "\$CB_COL" ] && echo "Error: 'CB' column not found in tags file" && exit 1
 
-    # Sort by corrected barcode to allow chunked reading later.
-    for file in chr_tags/*.tsv;
-    do
-        csvtk sort -t --keys CB "\$file" -o tmp.tsv;
-        mv tmp.tsv "\$file";
+    # Merge the tag TSVs, keeping the header from the first file and splitting entries by chromosome
+    awk -F'\t' -v CHR_COL=\$CHR_COL 'FNR==1{hdr=\$0; next} \
+    {
+        if (!seen[\$CHR_COL]++) \
+            print hdr>"chr_tags/"\$CHR_COL".tsv"; \
+            print>"chr_tags/"\$CHR_COL".tsv"
+    }' tags/*
+
+    # Sort by corrected cell barcode so downstream processess can read contiguous CB blocks.
+    find -L chr_tags -name "*.tsv" -type f | while read -r file; do
+        head -n 1 "\$file" > "\${file}.sorted"
+        tail -n +2 "\$file" \
+            | sort \
+                --buffer-size=${buffer_size} \
+                --temporary-directory=${tmpdir} \
+                --parallel=${sort_threads} \
+                --field-separator=\$'\\t' \
+                --key=\${CB_COL},\${CB_COL} \
+            >> "\${file}.sorted"
+        mv "\${file}.sorted" "\${file}"
     done
+    rm -rf ${tmpdir}
     """
 }
 
