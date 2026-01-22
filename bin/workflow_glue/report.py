@@ -127,7 +127,7 @@ def visium_spatial_plots(non_hd_coords, sample_dirs, hd=False):
                 f"{', '.join(no_data.index)}")
 
 
-def umap_plots(umaps_dirs, genes_file):
+def umap_plots(umaps_dirs, genes_of_interest):
     """Plot UMAPs."""
     sample_tabs = Tabs()
 
@@ -242,35 +242,39 @@ def umap_plots(umaps_dirs, genes_file):
                         # Start another grid to put in genes of interest and
                         # optional SNV plot
                         with Grid(columns=2):
+                            # Genes of interest overlay:
+                            # If a genes-of-interest file is supplied, overlay per-gene
+                            # expression on the UMAPs.
+                            if genes_of_interest:
+                                # single-column file (one gene name per line)
+                                genes = pd.read_csv(genes_of_interest, header=None)[0]
+                                goi_tabs = Tabs()
 
-                            # Annotate with gene of interest expression levels.
-                            # Read single column gene list file
-                            genes = pd.read_csv(genes_file, header=None)[0]
-                            goi_tabs = Tabs()
-
-                            with goi_tabs.add_dropdown_menu(
-                                    'Genes of interest', change_header=True):
-                                if goi_df is None:
-                                    raw("No genes of interest data available")
-                                else:
-                                    for gene in genes:
-                                        with goi_tabs.add_dropdown_tab(gene):
-                                            gene_df = goi_df.query('gene == @gene')
-                                            if not gene_df.empty:
-                                                goi_data = gene_umap.merge(
-                                                    gene_df,
-                                                    left_index=True, right_index=True)
-                                                # raise ValueError(goi_data)
-                                                if goi_data.empty:
-                                                    continue
-                                                _plot(
-                                                    goi_data,
-                                                    title=f'Gene UMAP / single gene '
-                                                    f'expression, annotation: {gene}',
-                                                    hue='count')
-                                            else:
-                                                with div():
-                                                    p(f"No data for {gene}")
+                                with goi_tabs.add_dropdown_menu(
+                                        'Genes of interest', change_header=True):
+                                    if goi_df is None:
+                                        raw("No genes of interest data available")
+                                    else:
+                                        for gene in genes:
+                                            with goi_tabs.add_dropdown_tab(gene):
+                                                gene_df = goi_df.query('gene == @gene')
+                                                if not gene_df.empty:
+                                                    goi_data = gene_umap.merge(
+                                                        gene_df,
+                                                        left_index=True,
+                                                        right_index=True)
+                                                    if goi_data.empty:
+                                                        continue
+                                                    _plot(
+                                                        goi_data,
+                                                        title=(
+                                                            'Gene UMAP / single gene '
+                                                            'expression, annotation: '
+                                                            f'{gene}'),
+                                                        hue='count')
+                                                else:
+                                                    with div():
+                                                        p(f"No data for {gene}")
 
                             # If there's a dataframe of top SNVs, create a further UMAP
                             # figure in the grid with a drop-down of SNVs for overlay
@@ -897,7 +901,7 @@ def main(args):
                 In order to have some confidence in the observed results,
                 it can be useful to run the projection multiple times and so a series of
                 UMAP projections can be viewed below.""")
-            umap_plots(args.expr_dirs, args.umap_genes)
+            umap_plots(args.expr_dirs, args.genes_of_interest)
 
     # Check if visium data were analysed
     if args.visium_spatial_coords or args.visium_hd:
@@ -930,8 +934,6 @@ def argparser():
         "--expr_dirs", nargs='+',
         help="Sample directories containing umap and gene expression files")
     parser.add_argument(
-        "--umap_genes", help="File containing list of genes to annotate UMAPs")
-    parser.add_argument(
         "--metadata", default='metadata.json', required=True,
         help="sample metadata")
     parser.add_argument(
@@ -955,4 +957,8 @@ def argparser():
     parser.add_argument(
         '--fusion_results_dir', type=Path, default=None,
         help="Fusion summary directory")
+    parser.add_argument(
+        "--genes_of_interest",
+        help="Optional file containing list of genes to annotate UMAPs with.",
+        required=False)
     return parser

@@ -91,24 +91,25 @@ process makeReport {
         path stats, stageAs: "stats_*"
         path 'survival.tsv'
         path expression_dirs
-        path umap_genes
+        path genes_of_interest, stageAs: "goi/*"
         val wf_version
         path 'seq_saturation.tsv'
         path 'gene_saturation.tsv'
         path 'knee_plot_counts.tsv'
         path 'bam_stats.tsv'
         path 'fusion_results_dir/*'
-        path visium_non_hd_coords
+        path visium_non_hd_coords, stageAs: 'visium_coords/*'
 
     output:
         path "wf-single-cell-*.html"
     script:
-        String report_name = "wf-single-cell-report.html"
-        String metadata = new JsonBuilder(metadata).toPrettyString()
-        String visium_opt = visium_non_hd_coords.fileName.name != OPTIONAL_FILE.name ? '--visium_spatial_coords ' + visium_non_hd_coords : ""
-        String visium_hd_opt =  params.spaceranger_bam ? '--visium_hd' : ""
-        String q_filtered = params.min_read_qual ? "--q_filtered": ""
-        String fusion_opt = params.call_fusions ? "--fusion_results_dir fusion_results_dir" : ""
+        def report_name = "wf-single-cell-report.html"
+        def metadata = new JsonBuilder(metadata).toPrettyString()
+        def visium_opt = visium_non_hd_coords.fileName.name != "OPTIONAL_FILE" ? "--visium_spatial_coords ${visium_non_hd_coords.name}" : ""
+        def goi_opt = genes_of_interest.fileName.name != "OPTIONAL_FILE" ? "--genes_of_interest ${genes_of_interest.name}": ""
+        def visium_hd_opt =  params.spaceranger_bam ? '--visium_hd' : ""
+        def q_filtered = params.min_read_qual ? "--q_filtered": ""
+        def fusion_opt = params.call_fusions ? "--fusion_results_dir fusion_results_dir" : ""
     """
     echo '${metadata}' > metadata.json
     workflow-glue report \
@@ -118,7 +119,6 @@ process makeReport {
         --versions versions \
         --survival survival.tsv \
         --expr_dirs $expression_dirs \
-        --umap_genes $umap_genes \
         --metadata metadata.json \
         --wf_version $wf_version \
         --metadata metadata.json \
@@ -129,7 +129,8 @@ process makeReport {
         $fusion_opt \
         $q_filtered \
         $visium_opt \
-        $visium_hd_opt
+        $visium_hd_opt \
+        $goi_opt
     """
 }
 
@@ -186,10 +187,10 @@ process prepare_report_data {
               path('transcript_mean_expression.tsv'),
               path('mitochondrial_expression.tsv'),
               path('matrix_stats.tsv'),
-              path(umaps),
+              path(umaps, stageAs: 'umaps/*'),
               path('bamstats/bam_stats*.tsv'),
-              path(snv)
-        path("genes_of_interest.tsv")
+              path(snv, stageAs: 'snv/*')
+        path genes_of_interest, stageAs: 'goi/*'
     output:
         // sample_id column added to survival.tsv and bm_stats.tsv no need for meta
         path "survival.tsv", emit: survival
@@ -197,10 +198,11 @@ process prepare_report_data {
         path "${meta.alias}_expression", emit: expression_dir
 
     script:
-        opt_umap = umaps.name != 'OPTIONAL_FILE'
-        opt_snv = snv.fileName.name != 'OPTIONAL_FILE'
-        String hist_dir = "histogram_stats/${meta.alias}"
+        def has_umap = umaps.fileName.name != 'OPTIONAL_FILE'
+        def has_snv = snv.fileName.name != 'OPTIONAL_FILE'
+        def opt_goi = genes_of_interest.fileName.name != 'OPTIONAL_FILE' ? "--genes_of_interest $genes_of_interest.name" : ""
     """
+
     # Make a directory to stick some expression related files per sample
     expression_dir="${meta.alias}_expression"
     mkdir \$expression_dir
@@ -208,13 +210,13 @@ process prepare_report_data {
     workflow-glue prepare_report_data \
         "${meta.alias}" bamstats expression_stats \
         white_list.txt survival.tsv bam_stats.tsv raw_gene_expression \
-        matrix_stats.tsv genes_of_interest.tsv ${meta.n_seqs} \
-        adapter_stats
+        matrix_stats.tsv ${meta.n_seqs} \
+        adapter_stats ${opt_goi}
 
-    if [ "$opt_umap" = "true" ]; then
+    if [ "$has_umap" = "true" ]; then
         echo "Adding umap data to sample directory"
         # Add data required for umap plotting into sample directory
-        mv *umap*.tsv \$expression_dir
+        mv umaps/*.tsv \$expression_dir
         mv gene_mean_expression.tsv \$expression_dir
         mv transcript_mean_expression.tsv \$expression_dir
         mv mitochondrial_expression.tsv \$expression_dir
@@ -222,9 +224,9 @@ process prepare_report_data {
         touch "\$umd"/OPTIONAL_FILE
     fi
 
-    if [ "$opt_snv" = "true" ]; then
+    if [ "$has_snv" = "true" ]; then
         echo "Adding snv data to sample directory"
-        mv $snv \$expression_dir
+        mv snv/* \$expression_dir
     fi
     """
 }
@@ -386,16 +388,16 @@ workflow pipeline {
 
         prepare_report_data(
             adapter_summary
-            .join(expression_stats)
-            .join(whitelist)
-            .join(expression_matrix)
-            .join(process_bams.out.gene_mean_expression)
-            .join(process_bams.out.transcript_mean_expression)
-            .join(process_bams.out.mitochondrial_expression)
-            .join(process_bams.out.matrix_stats)
-            .join(process_bams.out.umap_matrices)
-            .join(bam_stats)
-            .join(top_snvs),
+                .join(expression_stats)
+                .join(whitelist)
+                .join(expression_matrix)
+                .join(process_bams.out.gene_mean_expression)
+                .join(process_bams.out.transcript_mean_expression)
+                .join(process_bams.out.mitochondrial_expression)
+                .join(process_bams.out.matrix_stats)
+                .join(process_bams.out.umap_matrices)
+                .join(bam_stats)
+                .join(top_snvs),
             genes_of_interest)
 
         // Get the metadata and stats for the report
@@ -497,11 +499,10 @@ workflow {
          ctat_resource_dir = OPTIONAL_FILE
     }
 
-
     if (params.genes_of_interest){
         genes_of_interest = file(params.genes_of_interest, checkIfExists: true)
     } else {
-        genes_of_interest = file("${projectDir}/data/genes_of_interest.csv", checkIfExists: true)
+        genes_of_interest = OPTIONAL_FILE
     }
 
     if (params.kit_config){

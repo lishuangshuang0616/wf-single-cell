@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - ezCharts plotting library has been updated to 0.15.1, there are no user facing changes to plots.
   - Fastcat FASTQ pre-processing program has been updated to 0.24.2, it is more robust to malformed FASTQ input.
   - CHANGELOG to be compliant with our formatting rules.
+- A default genes_of_interest.csv file will no longer be used.
+
 ### Fixed
 - The visium HD workflow now accepts gzip compressed reference annotation files.
 - Processed BAMs and read summary output files, from visium HD data, now include read quality strings.

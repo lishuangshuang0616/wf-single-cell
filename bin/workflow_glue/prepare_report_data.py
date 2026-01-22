@@ -41,14 +41,14 @@ def argparser():
         "matrix_stats", type=Path,
         help="TSV file with matrix sumary stats.")
     parser.add_argument(
-        "genes_of_interest", type=Path,
-        help="TSV file of file names.")
-    parser.add_argument(
         "n_input_seqs", type=int,
         help="Number of seqs input to the workflow after read quality filtering.")
     parser.add_argument(
         "adapter_stats", type=Path,
         help="Workflow summary statistics")
+    parser.add_argument(
+        "--genes_of_interest", type=Path, required=False,
+        help="TSV file of gene names.")
     return parser
 
 
@@ -111,13 +111,16 @@ def get_total_cells(white_list):
     return {"cells": total_cells}
 
 
-def get_genes_of_interest_expression(mex_dir, genes):
+def get_genes_of_interest_expression(mex_dir, genes_file):
     """Get a subset of the expression data.
 
     Given a list of genes, extract corresponding expression data from the MEX format
     matrix, write TSV of X,Y, <genes ...>.  skipping zero values
     """
-    genes_to_plot = pd.read_csv(genes, header=None)[0]
+    goi_df = pd.DataFrame()
+    if not genes_file:
+        return goi_df
+    genes_to_plot = pd.read_csv(genes_file, header=None)[0]
     matrix = mmread(mex_dir / 'matrix.mtx.gz')
     barcodes = pd.read_csv(mex_dir / 'barcodes.tsv.gz', header=None)
     # Remove '-1' suffix from barcodes
@@ -139,12 +142,9 @@ def get_genes_of_interest_expression(mex_dir, genes):
         except IndexError:
             continue  # no data
     if len(sparse_gene_data) > 0:
-        return (
-            pd.DataFrame.from_records(
-                sparse_gene_data, columns=['gene', 'barcode', 'count'])
-        )
-    else:
-        return pd.DataFrame()
+        goi_df = pd.DataFrame.from_records(
+            sparse_gene_data, columns=['gene', 'barcode', 'count'])
+    return goi_df
 
 
 def main(args):
