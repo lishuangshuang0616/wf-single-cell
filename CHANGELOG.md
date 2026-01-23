@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A default genes_of_interest.csv file will no longer be used.
 
 ### Fixed
+- `ValueError: zero-size array to reduction operation maximum which has no identity` when generating UMAPs with fewer than 4 cells.
+- Excessive memory usage by csvtk sort in the `cat_tags_by_chr` process. Now using gnu sort.
 - The visium HD workflow now accepts gzip compressed reference annotation files.
 - Processed BAMs and read summary output files, from visium HD data, now include read quality strings.
-- Excessive memory usage by csvtk sort in the `cat_tags_by_chr` process. Now using gnu sort.
 
 ## [v3.3.3]
 ### Fixed

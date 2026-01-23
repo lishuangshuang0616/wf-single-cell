@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+OPTIONAL_FILE = file("$projectDir/data/OPTIONAL_FILE")
 
 include { merge_and_publish_tsv } from '../modules/local/common'
 
@@ -57,6 +58,7 @@ process process_matrix {
         // mito per cell makes sense only for feature=gene for now.
         tuple val(meta), val(feature), path("${meta.alias}.gene_expression_mito_per_cell.tsv"), emit: mitocell, optional: true
         tuple val(meta), val(feature), path("${meta.alias}.${feature}_expression_umap*.tsv"), emit: umap
+        tuple val(meta), path('status.json'), emit: status
     script:
     def mito_prefixes = params.mito_prefix.replaceAll(',', ' ')
     def opt_seq_sat = feature == 'gene' ?  "--seq_saturation seq_saturation.tsv --gene_saturation gene_saturation.tsv" : ""
@@ -78,7 +80,7 @@ process process_matrix {
         --mito_prefixes $mito_prefixes \
         --norm_count $params.matrix_norm_count \
         --enable_umap \
-        --replicates 3 \
+        --replicates $params.umap_n_repeats \
         --sample "${meta.alias}" \
         $opt_seq_sat
     """
@@ -232,6 +234,11 @@ workflow process_bams {
         // Emit sperately for use in the report
         // TODO: it shouldn't be the concern of this process what goes in the report
         //       instead just collate everything possible per sample
+        
+        // If other processes should want to output a status, 
+        // they can be collected here into a single emission.
+        status = process_matrix.out.status
+       
         final_read_tags = final_read_tags
         tagged_bam = tag_bam.out.tagged_bam
         matrix_stats = process_matrix.out.stats
@@ -257,8 +264,8 @@ workflow process_bams {
             .map{it->[it[0], it[2]]}
         umap_matrices = process_matrix.out.umap
             .map{it->[it[0], it[2]]}
-            .groupTuple(size:2)
-            .map{key, files -> [key, files.flatten()]}
+            .groupTuple()
+            .map {meta, files -> [meta, files.flatten()]}
         seq_saturation = process_matrix.out.seq_saturation
             .filter{it[1] == "gene"}
             .map{_meta, _feature, files -> files}

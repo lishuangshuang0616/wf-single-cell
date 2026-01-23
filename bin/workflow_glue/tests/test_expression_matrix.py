@@ -417,6 +417,7 @@ def test_process_matrix(tags_df):
         args.pcn = None
         args.seq_saturation = False
         args.gene_saturation = False
+        args.sample = 'Test'
 
         process_matrix.main(args)
 

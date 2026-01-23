@@ -86,6 +86,7 @@ process makeReport {
     publishDir "${params.out_dir}", mode: 'copy', pattern: "wf-single-cell-report.html"
     input:
         val metadata
+        path 'results.json'
         path 'versions'
         path 'params.csv'
         path stats, stageAs: "stats_*"
@@ -115,6 +116,7 @@ process makeReport {
     workflow-glue report \
         $report_name \
         --stats $stats \
+        --results results.json \
         --params params.csv \
         --versions versions \
         --survival survival.tsv \
@@ -170,6 +172,41 @@ process parse_kit_metadata {
             --output merged.csv
         """
     }
+}
+
+process process_results {
+    // Generate a results.json using workflow.models. This is currently using to 
+    // send sample statuses to the report, but could be a full replacement for 
+    // prepare_report_data in the future.
+    label  "wf_common"
+    cpus 2
+    memory "4GB"
+    input:
+       tuple val(meta),
+             path('status_files/status*.json')
+    output:
+        path("sample_results.json")
+    script:
+    String metadata = new JsonBuilder(meta).toPrettyString()
+    """
+    echo '${metadata}' > metadata.json
+    workflow-glue process_results sample_results.json metadata.json status_files
+    """
+}
+
+process combine_results {
+   // Combine the per-sample JSON results 
+    label  "wf_common"
+    cpus 2
+    memory "4GB"
+    input:
+        path "jsons/sample_*.json"
+    output:
+        path("results.json")
+    script:
+    """
+    workflow-glue combine_results jsons results.json
+    """
 }
 
 
@@ -403,17 +440,24 @@ workflow pipeline {
         // Get the metadata and stats for the report
         chunks
             .groupTuple()
-            .multiMap{ meta, _chunk, stats->
+            .multiMap{ meta, _chunk, stats ->
                 meta: meta
                 stats: stats[0]
             }.set { for_report }
         metadata = for_report.meta.collect()
         stats = for_report.stats.collect()
-
+        
+        // Aggregate status files from the various processes (currently just process_bams)
+        pr_status = process_bams.out.status
+            .groupTuple()
+        
+        results = combine_results(process_results(pr_status).collect())
+        
         // note the cheeky little .collectFile() here to concatenate the
         // read survival stats from different samples into a single file
         makeReport(
             metadata,
+            results,
             software_versions,
             workflow_params,
             stats,

@@ -117,7 +117,7 @@ def get_genes_of_interest_expression(mex_dir, genes_file):
     Given a list of genes, extract corresponding expression data from the MEX format
     matrix, write TSV of X,Y, <genes ...>.  skipping zero values
     """
-    goi_df = pd.DataFrame()
+    goi_df = pd.DataFrame(columns=['gene', 'barcode', 'count'])
     if not genes_file:
         return goi_df
     genes_to_plot = pd.read_csv(genes_file, header=None)[0]
@@ -140,7 +140,8 @@ def get_genes_of_interest_expression(mex_dir, genes_file):
                 (gene, bc, val) for bc, val in zip(barcodes_for_gene, values)]
             sparse_gene_data.extend(single_gene)
         except IndexError:
-            continue  # no data
+            # User requested this gene of interest, but no data found.
+            sparse_gene_data.append((gene, 'NODATA', 0))
     if len(sparse_gene_data) > 0:
         goi_df = pd.DataFrame.from_records(
             sparse_gene_data, columns=['gene', 'barcode', 'count'])
