@@ -65,14 +65,14 @@ def test_process_records(tmp_path, allowed_barcodes, use_kmer_index):
         pd.DataFrame(rows, columns=header)
         .set_index('read_id', drop=True)
         .assign(SA='True'))  # Add constant SA column (not used in the tested code)
-    tags_file = tmp_path / 'tags.tsv'
-    tags.to_csv(tags_file.name, sep='\t')
-    tags_output = tmp_path / 'tags_out.tsv'
+    tags_file = tmp_path / 'tags.tsv.zst'
+    tags.to_csv(tags_file, sep='\t', compression='zstd')
+    tags_output = tmp_path / 'tags_out.tsv.zst'
 
     max_ed = 2
     min_ed_diff = 2
     barcode_counter, reasons_counter = process_records(
-        tags_file.name, allowed_barcodes,
+        tags_file, allowed_barcodes,
         max_ed, min_ed_diff, tags_output.name,
         use_kmer_index=use_kmer_index)
 

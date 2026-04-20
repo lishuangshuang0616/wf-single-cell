@@ -16,10 +16,12 @@ primary alignment to be properly tagged.
 """
 import csv
 from dataclasses import dataclass
+import io
 import itertools
 from pathlib import Path
 
 import pysam
+import zstandard as zstd
 from .util import get_named_logger, wf_parser  # noqa: ABS101
 
 logger = get_named_logger("TagBAMs")
@@ -107,7 +109,7 @@ class TagStore:
         elif tags.is_dir():
             if bam is None:
                 raise ValueError("`bam` should be provided when `tags` is a directory.")
-            tags = tags.glob("*.tsv")
+            tags = tags.glob("*.tsv.zst")
             self._index = dict()
             for fname in tags:
                 d = self._read_file(fname, nrows=10)
@@ -129,7 +131,7 @@ class TagStore:
         # chr to primary record.
         sa_tags_files = []
         if sa_tags is not None:
-            sa_tags_files = sa_tags.glob("*.tsv")
+            sa_tags_files = sa_tags.glob("*.tsv.zst")
         sa_tags = {}
         for fname in sa_tags_files:
             sa_tags.update(self._read_file(fname))
@@ -152,20 +154,25 @@ class TagStore:
         #       pd.read_csv().to_dict(orient="index")
         # first find and rename the fields to be tags rather than human names
         fields = None
-        with open(fname) as csvfile:
-            iterator = csv.DictReader(csvfile, delimiter="\t")
-            fields = iterator.fieldnames
-            for k, v in BAM_TAGS.items():
-                for i in range(len(fields)):
-                    if fields[i] == k:
-                        fields[i] = v
+        with open(fname, 'rb') as csvfile:
+            with zstd.ZstdDecompressor().stream_reader(csvfile) as reader:
+                text_stream = io.TextIOWrapper(reader, encoding="utf-8")
+                iterator = csv.DictReader(text_stream, delimiter="\t")
+                fields = iterator.fieldnames
+                for k, v in BAM_TAGS.items():
+                    for i in range(len(fields)):
+                        if fields[i] == k:
+                            fields[i] = v
         # now parse the file
-        with open(fname) as csvfile:
-            iterator = csv.DictReader(csvfile, delimiter="\t", fieldnames=fields)
-            next(iterator)  # setting fieldnames doesn't read header
-            if nrows is not None:
-                iterator = itertools.islice(iterator, nrows)
-            data = {d["read_id"]: Tags.from_dict(d) for d in iterator}
+        with open(fname, 'rb') as csvfile:
+            with zstd.ZstdDecompressor().stream_reader(csvfile) as reader:
+                text_stream = io.TextIOWrapper(reader, encoding="utf-8")
+                iterator = csv.DictReader(
+                    text_stream, delimiter="\t", fieldnames=fields)
+                next(iterator)  # setting fieldnames doesn't read header
+                if nrows is not None:
+                    iterator = itertools.islice(iterator, nrows)
+                data = {d["read_id"]: Tags.from_dict(d) for d in iterator}
         return data
 
     def __getitem__(self, read_data):

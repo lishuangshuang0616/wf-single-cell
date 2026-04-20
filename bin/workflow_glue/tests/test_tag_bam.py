@@ -105,10 +105,10 @@ def test_add_tags(tmp_path, tags, prim_records, supp_records):
 
     # Write the per chr primary tags file
     for chr_, chr_df in tags_df.groupby('chr'):
-        chr_df.to_csv(prim_tags_dir / f'{chr_}.tsv', sep='\t')
+        chr_df.to_csv(prim_tags_dir / f'{chr_}.tsv.zst', sep='\t', compression='zstd')
 
-    sa_tags_file = sa_tags_dir / 'sa_tags.tsv'
-    sa_tags_df.to_csv(sa_tags_file, sep='\t')
+    sa_tags_file = sa_tags_dir / 'sa_tags.tsv.zst'
+    sa_tags_df.to_csv(sa_tags_file, sep='\t', compression='zstd')
 
     test_bam = make_bam(tmp_path, prim_records + supp_records)
 
@@ -150,9 +150,9 @@ def test_empty_file(tmp_path):
     tmp_test_dir.mkdir()
     tmp_sa_dir = tmp_path / 'sa_tags'
     tmp_sa_dir.mkdir()
-    header_only_file = tmp_test_dir / 'test_tags.tsv'
-    header_only_sa_file = tmp_sa_dir / 'test_sa_tags.tsv'
-    tags_df.to_csv(header_only_file, sep='\t')
-    tags_df.to_csv(header_only_sa_file, sep='\t')
+    header_only_file = tmp_test_dir / 'test_tags.tsv.zst'
+    header_only_sa_file = tmp_sa_dir / 'test_sa_tags.tsv.zst'
+    tags_df.to_csv(header_only_file, sep='\t', compression='zstd')
+    tags_df.to_csv(header_only_sa_file, sep='\t', compression='zstd')
     out_bam = tmp_path / 'out.bam'
     tag_bam.add_tags(tmp_test_dir, tmp_sa_dir, input_bam, out_bam, threads=1)

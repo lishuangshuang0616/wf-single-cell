@@ -24,7 +24,7 @@ def argparser():
         help="Chromosome name")
     parser.add_argument(
         "barcode_tags", type=Path,
-        help="Read tags TSV file.")
+        help="Read tags tsv.zst file.")
     parser.add_argument(
         "features", type=Path,
         help="TSV read gene/transcript assignments file.")
@@ -218,7 +218,7 @@ def chunk_reader(file_path, chunk_size, ub_col=False):
     """
     Read TSV file in chunks, ensuring that no CB (cell barcode) is split between chunks.
 
-    :param file_path str: Path to the TSV
+    :param file_path str: Path to the zstd-compressed TSV
     :param chunk_size int: Desired number of rows per chunk (approximate).
     :param ub_col bool: If True, the 'UB' column is expected to be present.
     :yields: Pandas DataFrame chunk.
@@ -276,11 +276,11 @@ def main(args):
 
     # Create header for tags TSV output
     pd.DataFrame(columns=tsv_out_cols).to_csv(
-        args.tsv_out, sep='\t', header=True, index=False)
+        args.tsv_out, sep='\t', header=True, index=False, compression='zstd')
 
     # Create header for SA tags TSV output
     pd.DataFrame(columns=tsv_out_cols).to_csv(
-        args.sa_tags_out, sep='\t', header=True, index=False)
+        args.sa_tags_out, sep='\t', header=True, index=False, compression='zstd')
 
     logger.info("Reading feature information.")
     df_features = pd.read_csv(
@@ -321,11 +321,13 @@ def main(args):
             df_sa.drop(columns='SA', inplace=True)
             df_sa = df_sa[tsv_out_cols]
             df_sa.to_csv(
-                args.sa_tags_out, sep='\t', header=False, mode='a', index=False)
+                args.sa_tags_out, sep='\t', header=False,
+                mode='a', index=False, compression='zstd')
             # Write the tags file for primary records.
             df_tags = df_tags[tsv_out_cols]
             df_tags.to_csv(
-                args.tsv_out, sep='\t', header=False, mode='a', index=False)
+                args.tsv_out, sep='\t', header=False,
+                mode='a', index=False, compression='zstd')
 
         if args.hdf_out:
             for feature in ("gene", "transcript"):

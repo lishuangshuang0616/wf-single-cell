@@ -1,11 +1,15 @@
 """Make report."""
+from enum import Enum
+import functools
 import json
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 from bokeh.models import ColorBar, Span
 from bokeh.models.tickers import BasicTicker
 from bokeh.transform import linear_cmap
+import dacite
 from dominate.tags import a, b, div, h4, h6, li, p, ul
 from dominate.util import raw, text
 import ezcharts
@@ -19,7 +23,7 @@ from ezcharts.util import get_named_logger
 import matplotlib
 import numpy as np
 import pandas as pd
-
+from workflow_glue.models.custom import SCWorkflowResult
 from .util import wf_parser  # noqa: ABS101
 
 
@@ -49,7 +53,6 @@ def visium_spatial_plots(non_hd_coords, sample_dirs, hd=False):
         sample_dir = Path(d)
 
         goi_file = sample_dir / 'raw_goi_expression.tsv'
-
         try:
             goi_df = pd.read_csv(
                 goi_file, sep='\t',
@@ -59,8 +62,9 @@ def visium_spatial_plots(non_hd_coords, sample_dirs, hd=False):
         if goi_df is None or goi_df.empty:
             raw("No data available for the selected genes of interest")
             return
-        goi_df = goi_df.sort_index()  # Not needed
 
+        no_data_genes = goi_df.loc[goi_df.barcode == 'NODATA']['gene']
+        goi_df = goi_df[goi_df['barcode'] != 'NODATA']
         if hd:
             # Get a mapping of barcodes to X and Y coordinates from the barcode names
             goi_df[['X', 'Y']] = (
@@ -76,9 +80,6 @@ def visium_spatial_plots(non_hd_coords, sample_dirs, hd=False):
 
             goi_df = goi_df.merge(
                 xy_df, left_on='barcode', right_index=True, how='left')
-
-        no_data = goi_df.loc[~goi_df.any(axis=1)]
-        goi_df = goi_df.loc[goi_df.any(axis=1)]
 
         genes = goi_df['gene'].unique()
 
@@ -122,188 +123,329 @@ def visium_spatial_plots(non_hd_coords, sample_dirs, hd=False):
                             plt._fig.title.text = gene_name
                             plt._fig.add_layout(color_bar, 'right')
                             EZChart(plt, width='500px', height='500px')
-        if len(no_data) > 1:
+        if len(no_data_genes) > 0:
             raw(f"<br>The following genes were not found in the expression matrix: "
-                f"{', '.join(no_data.index)}")
+                f"{', '.join(no_data_genes)}")
 
 
-def umap_plots(umaps_dirs, genes_file):
-    """Plot UMAPs."""
-    sample_tabs = Tabs()
+def load_umap_rep(path):
+    """Load a single UMAP replicate TSV as a DataFrame."""
+    return pd.read_csv(path, sep='\t', index_col='CB')
 
-    def _plot(data, title, hue):
+
+class UmapRender:
+    """Renderer for UMAP plots.
+
+    Encapsulates per-sample UMAP data: projection matrices, overlay annotation
+    DataFrames, and status flags derived from the workflow results.
+    """
+
+    def __init__(
+            self, sample_id, gene_umap_files, transcript_umap_files,
+            mito_df, gene_mean_df, tr_mean_df, goi_df, goi_status, snv_df, snv_status,
+            gene_status, transcript_status):
+        """Initialize UmapRender instance."""
+        self.sample_id = sample_id
+        self.goi_status = goi_status
+        self.snv_status = snv_status
+        self.gene_status = gene_status
+        self.transcript_status = transcript_status
+
+        self._gene_umap_files = gene_umap_files
+        self._transcript_umap_files = transcript_umap_files
+        self._mito_df = mito_df
+        self._gene_mean_df = gene_mean_df
+        self._tr_mean_df = tr_mean_df
+        self._goi_df = goi_df
+        self._snv_df = snv_df
+        self._gene_reps = {}
+        self._transcript_reps = {}
+
+    @classmethod
+    def from_dirs(cls, results):
+        """Yield `UmapRender` instances, one per sample directory.
+
+        param results: WorkflowResult object - contains UMAP status info
+        """
+        logger = get_named_logger("Report")
+        for sample in results.samples:
+            sample_id = sample.alias
+            sample_dir = Path(f"{sample_id}_expression")
+            # record statuses for gene and transcript UMAP generation
+            gene_status = sample.results.umap.gene_status
+            transcript_status = sample.results.umap.transcript_status
+
+            gene_umap_files = None
+            gene_mean_expression = None
+            transcript_umap_files = None
+            transcript_mean_expression = None
+            snv_df = None
+            mito_expression = None
+            goi_df = None
+            # Record status of genes of interest data availability.
+            # Users may have selected genes that resulted
+            goi_status = SimpleNamespace(passed=True, msg="OK")
+            snv_status = SimpleNamespace(passed=True, msg="OK")
+
+            if gene_status == 'OK':
+                gene_umap_files = [
+                    sample_dir / p for p in sample.results.umap.gene_umap_file_names]
+                gene_mean_expression = pd.read_csv(
+                    sample_dir / 'gene_mean_expression.tsv',
+                    sep='\t', index_col='CB',
+                    dtype={'mean_expression': float})
+
+                mito_expression = pd.read_csv(
+                    sample_dir / "mitochondrial_expression.tsv",
+                    sep='\t', index_col='CB',
+                    dtype={'mito_pct': float})
+
+            if transcript_status == 'OK':
+                transcript_umap_files = [
+                    sample_dir / p for p in
+                    sample.results.umap.transcript_umap_file_names]
+                transcript_mean_expression = pd.read_csv(
+                    sample_dir / 'transcript_mean_expression.tsv',
+                    sep='\t', index_col='CB',
+                    dtype={'mean_expression': float})
+
+            goi_file = sample_dir / 'raw_goi_expression.tsv'
+            goi_df = pd.read_csv(
+                goi_file,
+                sep='\t',
+                index_col='barcode')
+            if goi_df.empty:
+                goi_status.passed = False
+                goi_status.msg = (
+                    f"No genes of interest data found for sample {sample_id}")
+                logger.info(goi_status)
+
+            top_snv = sample_dir / 'top_snvs.tsv'
+            if top_snv.is_file():
+                snv_df = pd.read_csv(
+                    top_snv, sep='\t', dtype=str, index_col='variant',
+                ).replace({
+                    '-1': 'no_data',
+                    '0': 'hom-ref',
+                    '1': 'het',
+                    '2': 'hom-alt',
+                })
+            else:
+                snv_status.passed = False
+                snv_status.msg = "SNV workflow not run"
+
+            yield cls(
+                sample_id,
+                gene_umap_files,
+                transcript_umap_files,
+                mito_expression,
+                gene_mean_expression,
+                transcript_mean_expression,
+                goi_df,
+                goi_status,
+                snv_df,
+                snv_status,
+                gene_status,
+                transcript_status)
+
+    def _get_gene_df(self, idx):
+        """Return cached gene UMAP dataframe for a replicate, or None."""
+        if idx in self._gene_reps:
+            df = self._gene_reps[idx]
+        else:
+            df = load_umap_rep(self._gene_umap_files[idx])
+            if df is not None:
+                self._gene_reps[idx] = df
+        return df
+
+    def _get_transcript_df(self, idx):
+        """Return cached transcript UMAP dataframe for a replicate, or None."""
+        if idx in self._transcript_reps:
+            df = self._transcript_reps[idx]
+        else:
+            df = load_umap_rep(self._transcript_umap_files[idx])
+            if df is not None:
+                self._transcript_reps[idx] = df
+        return df
+
+    def gene_rep(self, idx):
+        """Render gene UMAP with mean gene expression annotation replicate plot."""
+        if self.gene_status != 'OK':
+            return p(self.gene_status)
+        df = self._get_gene_df(idx)
+        return self._plot_umap(
+            df.join(self._gene_mean_df),
+            'Gene UMAP / mean gene expression annotation',
+            hue='mean_expression')
+
+    def mito_rep(self, idx):
+        """Get UMAP plot of percentage of gene expresion from mitochondria."""
+        if self.gene_status != 'OK':
+            return p(self.gene_status)
+        df = self._get_gene_df(idx)
+        if df is None or self._mito_df is None:
+            return p(self.gene_status)
+        mito_df = df.join(self._mito_df)
+        return self._plot_umap(
+            mito_df,
+            'Gene UMAP / mean mito. expression annotation',
+            hue='mito_pct')
+
+    def transcript_rep(self, idx):
+        """Get transcript UMAP replicate plot."""
+        if self.transcript_status != 'OK':
+            return p(self.transcript_status)
+        df = self._get_transcript_df(idx)
+        return self._plot_umap(
+            df.join(self._tr_mean_df),
+            'Transcript UMAP / mean transcript expression annotation',
+            hue='mean_expression')
+
+    def goi_rep(self, idx):
+        """Gene expression UMAP plots with genes-of-interest expression annotation."""
+        if not self.goi_status.passed or self.gene_status != 'OK':
+            yield None, functools.partial(p, self.goi_status.msg)
+            return
+        df = self._get_gene_df(idx)
+        for gene in self._goi_df['gene'].unique():
+            goi_df = self._goi_df.query('gene == @gene')
+            if 'NODATA' in goi_df.index:
+                yield gene, functools.partial(p, f'No data for {gene}')
+            else:
+                gene_df = df.join(goi_df)
+                yield gene, functools.partial(
+                    self._plot_umap,
+                    gene_df,
+                    f'Gene UMAP / gene expression for: {gene}',
+                    hue='count')
+
+    def snv_reps(self, idx):
+        """Gene expression UMAP plots with SNV call annotation."""
+        df = self._get_gene_df(idx)
+        if self._snv_df is None or df is None:
+            return
+        for _, snv in self._snv_df.iterrows():
+            snv_df = df.join(snv)
+            snv_title = f'Gene umap / genotype annotation: {snv.name}'
+            plt = ezcharts.scatterplot(
+                data=snv_df,
+                x='D1', y='D2',
+                hue=str(snv.name),
+                s=0.3,
+                fill_alpha=.4,
+                marker=True
+                )
+            plt._fig.title = snv_title.format(snv.name)
+            yield snv.name, functools.partial(EZChart, plt, theme='epi2melabs')
+
+    def __len__(self):
+        """Return the number of UMAP replicates for this sample.
+
+        Transcript and gene UMAPs may have different replicate counts;
+        """
+        len_gene_umaps = len(self._gene_umap_files) \
+            if self._gene_umap_files is not None else 0
+        len_transcript_umaps = len(self._transcript_umap_files) \
+            if self._transcript_umap_files is not None else 0
+        return max(len_gene_umaps, len_transcript_umaps)
+
+    def __iter__(self):
+        """Iterate over replicate indices for this sample."""
+        for idx in range(len(self)):
+            yield idx
+
+    @staticmethod
+    def _plot_umap(data, title, hue):
+        # Build minimal dataset with controlled column order so dimension indices
+        # are stable and hue is always at position 2 (third column).
+        plot_df = data[['D1', 'D2', hue]]
+
+        hue_max = float(plot_df[hue].max())
+        hue_min = float(plot_df[hue].min())
+        # Avoid identical min/max (flat color scale) by widening slightly
+        if hue_max == hue_min:
+            hue_max += 1e-9
+
         plt = Plot()
         plt.title = dict(text=title)
         plt.title.textStyle = dict(fontSize=14)
         plt.xAxis = dict(name='D1')
         plt.yAxis = dict(name='D2')
-        plt.add_dataset(dict(
-            source=data.values))
-
-        try:
-            plt.visualMap = [
-                {
-                    'show': True,
-                    'text': [
-                        str(round(max(data[hue]), 2)), str(round(min(data[hue]), 2))],
-                    'left': 'right',
-                    'type': "continuous",
-                    'min': min(data[hue]),
-                    'max': max(data[hue]),
-                    'inRange': {
-                        'color': ['blue', 'green', 'yellow',  'red'],
-                        'opacity': 0.7,
-                    },
-                    'dimension': 2
-                }]
-        except Exception:
-            raise
-        plt.add_series(dict(
-            type='scatter',
-            datasetIndex=0,
-            symbolSize=2,
-            symbol='circle'))
+        plt.add_dataset(dict(source=plot_df.values))
+        plt.visualMap = [{
+            'show': True,
+            'text': [
+                str(round(hue_max, 2)),
+                str(round(hue_min, 2))
+            ],
+            'left': 'right',
+            'type': 'continuous',
+            'min': hue_min,
+            'max': hue_max,
+            'inRange': {
+                'color': ['blue', 'green', 'yellow', 'red'],
+                'opacity': 0.7
+            },
+            'dimension': 2
+        }]
+        plt.add_series({
+            'type': 'scatter',
+            'datasetIndex': 0,
+            'symbolSize': 2,
+            'symbol': 'circle'
+        })
         EZChart(plt, theme='epi2melabs')
 
+
+def umap_plots(results, genes_of_interest):
+    """
+    Plot UMAPs.
+
+    param umaps_dirs: list of directories containing UMAP files
+    param results: WorkflowResult object
+    """
+    sample_tabs = Tabs()
     with sample_tabs.add_dropdown_menu('sample', change_header=True):
-        # Get data from each sample folder
-        for d in umaps_dirs:
-
-            sample_id = d.replace('_umap', '')
-            sample_dir = Path(d)
-
-            with sample_tabs.add_dropdown_tab(sample_id):
-
-                repl_tabs = Tabs()
-
-                gene_umap_files = sample_dir.glob(
-                    '*gene_expression_umap*.tsv')
-                transcript_umap_files = sample_dir.glob(
-                    '*transcript_expression_umap*.tsv')
-                goi_file = sample_dir / 'raw_goi_expression.tsv'
-                try:
-                    goi_df = pd.read_csv(
-                        goi_file, sep='\t', index_col='barcode',
-                        usecols=['gene', 'barcode', 'count'])
-                except (pd.errors.EmptyDataError, ValueError):
-                    goi_df = None
-                for i, (
-                    gene_umap_file, transcript_umap_file
-                ) in enumerate(zip(gene_umap_files, transcript_umap_files)):
-
-                    with repl_tabs.add_tab(f'umap #{i}'):  # Tab for UMAP repeat
-
-                        gene_umap = pd.read_csv(gene_umap_file, sep='\t', index_col=0)
-
-                        gene_mean_expression = pd.read_csv(
-                            sample_dir / 'gene_mean_expression.tsv',
-                            sep='\t', index_col=0,
-                        )
-
-                        transcript_umap = pd.read_csv(
-                            transcript_umap_file, sep='\t', index_col=0)
-
-                        transcript_mean_expression = pd.read_csv(
-                            sample_dir / 'transcript_mean_expression.tsv',
-                            sep='\t', index_col=0,
-                        )
-
-                        mito_expression_file = (
-                            sample_dir / "mitochondrial_expression.tsv")
-                        mito_expression = pd.read_csv(
-                            mito_expression_file, sep='\t', index_col=0)
-
-                        # Make the plots mean gene transcript and mito plots
-                        # with Grid(columns=2):
-
-                        gdata = gene_umap.merge(
-                            gene_mean_expression, left_index=True, right_index=True)
-                        _plot(
-                            gdata,
-                            title='Gene UMAP / mean gene expression annotation',
-                            hue='mean_expression')
-
-                        tdata = transcript_umap.merge(
-                            transcript_mean_expression, left_index=True,
-                            right_index=True)
-                        _plot(
-                            tdata,
-                            title='Transcript UMAP / '
-                                  'mean transcript expression annotation',
-                            hue='mean_expression')
-
-                        mdata = gene_umap.merge(
-                            mito_expression, left_index=True, right_index=True)
-                        _plot(
-                            mdata,
-                            title='Gene UMAP / mean mito. expression '
-                                  'annotation', hue='mito_pct')
-
-                        # Start another grid to put in genes of interest and
-                        # optional SNV plot
+        for umap_sample in UmapRender.from_dirs(results):
+            with sample_tabs.add_dropdown_tab(umap_sample.sample_id):
+                replicate_tabs = Tabs()
+                for rep in umap_sample:
+                    # Main UMAP grid. Gene, transcript, genome+mito
+                    with replicate_tabs.add_tab(f'umap #{rep}'):
                         with Grid(columns=2):
-
-                            # Annotate with gene of interest expression levels.
-                            # Read single column gene list file
-                            genes = pd.read_csv(genes_file, header=None)[0]
-                            goi_tabs = Tabs()
-
-                            with goi_tabs.add_dropdown_menu(
-                                    'Genes of interest', change_header=True):
-                                if goi_df is None:
-                                    raw("No genes of interest data available")
+                            umap_sample.gene_rep(rep)
+                            umap_sample.transcript_rep(rep)
+                            umap_sample.mito_rep(rep)
+                        # Genes of interest overlay:
+                        # If a genes-of-interest file is supplied, overlay per-gene
+                        # expression on the UMAPs.
+                        with Grid(columns=2):
+                            if genes_of_interest:
+                                if umap_sample.goi_status.passed:
+                                    goi_tabs = Tabs()
+                                    with goi_tabs.add_dropdown_menu(
+                                        'Genes of interest', change_header=True
+                                    ):
+                                        for gene, goi_plt in umap_sample.goi_rep(rep):
+                                            with goi_tabs.add_dropdown_tab(gene):
+                                                goi_plt()
                                 else:
-                                    for gene in genes:
-                                        with goi_tabs.add_dropdown_tab(gene):
-                                            gene_df = goi_df.query('gene == @gene')
-                                            if not gene_df.empty:
-                                                goi_data = gene_umap.merge(
-                                                    gene_df,
-                                                    left_index=True, right_index=True)
-                                                # raise ValueError(goi_data)
-                                                if goi_data.empty:
-                                                    continue
-                                                _plot(
-                                                    goi_data,
-                                                    title=f'Gene UMAP / single gene '
-                                                    f'expression, annotation: {gene}',
-                                                    hue='count')
-                                            else:
-                                                with div():
-                                                    p(f"No data for {gene}")
+                                    p(umap_sample.goi_status.msg)
 
-                            # If there's a dataframe of top SNVs, create a further UMAP
-                            # figure in the grid with a drop-down of SNVs for overlay
-                            snv_tabs = Tabs()
-
-                            top_snv = sample_dir / 'top_snvs.tsv'
-                            if top_snv.is_file():
-                                snv_df = pd.read_csv(
-                                    top_snv, sep='\t', dtype=str, index_col=0)
-                                snv_df = snv_df.replace({
-                                    '-1': 'no_data',
-                                    '0': 'hom-ref',
-                                    '1': 'het',
-                                    '2': 'hom-alt'
-                                })
-
-                                # SNV annotation
+                            if umap_sample.snv_status:
+                                snv_tabs = Tabs()
                                 with snv_tabs.add_dropdown_menu(
-                                        'SNV', change_header=False):
-                                    for i, snv in snv_df.iterrows():
-                                        with snv_tabs.add_dropdown_tab(snv.name):
-                                            gene_snv_data = gene_umap.merge(
-                                                snv, left_index=True, right_index=True)
-                                            plt = ezcharts.scatterplot(
-                                                data=gene_snv_data,
-                                                x='D1', y='D2',
-                                                hue=str(snv.name), s=0.3,
-                                                fill_alpha=.4, marker=True)
-                                            plt._fig.title = (
-                                                'Gene umap / genotype '
-                                                f'annotation: {snv.name}'
-                                            )
-                                            EZChart(plt, theme='epi2melabs')
+                                    'SNV', change_header=True
+                                ):
+                                    for snv_name, snv_plt in umap_sample.snv_reps(
+                                        rep
+                                    ):
+                                        with snv_tabs.add_dropdown_tab(
+                                            snv_name
+                                        ):
+                                            snv_plt()
+                            else:
+                                p(umap_sample.snv_status.msg)
 
 
 def saturation_plots(seq_data, gene_data, type_label):
@@ -678,6 +820,14 @@ def main(args):
     logger = get_named_logger("Report")
     logger.info('Building report')
 
+    # Load the workflow model generated resutls. Currently this is only used for the
+    # UMAP statues.
+    results = dacite.from_dict(
+        data_class=SCWorkflowResult,
+        data=json.load(open(args.results)),
+        config=dacite.Config(cast=[Enum])
+    )
+
     if args.visium_hd:
         type_label = '8 µm bin'
     elif args.visium_spatial_coords:
@@ -711,8 +861,6 @@ def main(args):
         usecols=['barcode', 'count', 'sample'], index_col='barcode')
 
     experiment_summary_section(report, wf_df, df_aln, df_counts, visium, type_label)
-
-    logger.info('Report writing finished')
 
     with open(args.metadata) as metadata:
         sample_details = [{
@@ -897,7 +1045,7 @@ def main(args):
                 In order to have some confidence in the observed results,
                 it can be useful to run the projection multiple times and so a series of
                 UMAP projections can be viewed below.""")
-            umap_plots(args.expr_dirs, args.umap_genes)
+            umap_plots(results, args.genes_of_interest)
 
     # Check if visium data were analysed
     if args.visium_spatial_coords or args.visium_hd:
@@ -915,7 +1063,10 @@ def argparser():
     parser.add_argument("report", help="Report output file")
     parser.add_argument(
         "--stats", nargs='+',
-        help="Fastcat per-read stats, ordered as per entries in --metadata.")
+        help="Fastcat per-read stats")
+    parser.add_argument(
+        "--results",
+        help="JSON results file ordered as per entries in --metadata.")
     parser.add_argument(
         "--survival",
         help="Read survival data in TSV format")
@@ -929,8 +1080,6 @@ def argparser():
     parser.add_argument(
         "--expr_dirs", nargs='+',
         help="Sample directories containing umap and gene expression files")
-    parser.add_argument(
-        "--umap_genes", help="File containing list of genes to annotate UMAPs")
     parser.add_argument(
         "--metadata", default='metadata.json', required=True,
         help="sample metadata")
@@ -955,4 +1104,8 @@ def argparser():
     parser.add_argument(
         '--fusion_results_dir', type=Path, default=None,
         help="Fusion summary directory")
+    parser.add_argument(
+        "--genes_of_interest", type=bool,
+        help="Optional file containing list of genes to annotate UMAPs with.",
+        required=False)
     return parser

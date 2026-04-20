@@ -1,4 +1,5 @@
 import java.util.ArrayList;
+OPTIONAL_FILE = file("$projectDir/data/OPTIONAL_FILE")
 
 include { merge_and_publish_tsv } from '../modules/local/common'
 
@@ -11,10 +12,10 @@ process create_matrix {
     cpus 1
     memory "12 GB"
     input:
-        tuple val(meta), val(chr), path("features.tsv"), path(read_tags, stageAs: "barcodes.tsv")
+        tuple val(meta), val(chr), path("features.tsv.zst"), path(read_tags, stageAs: "barcodes.tsv.zst")
     output:
-        tuple val(meta), val(chr), path("summary.tsv"), emit: summary
-        tuple val(meta), val(chr), path("sa_summary.tsv"), emit: sa_summary
+        tuple val(meta), val(chr), path("summary.tsv.zst"), emit: summary
+        tuple val(meta), val(chr), path("sa_summary.tsv.zst"), emit: sa_summary
         tuple val(meta), val(chr), val("gene"), path("hdfs/*gene.hdf"), emit: gene
         tuple val(meta), val(chr), val("transcript"), path("hdfs/*transcript.hdf"), emit: transcript
         tuple val(meta), val(chr), path("stats.json"), emit: stats
@@ -25,9 +26,9 @@ process create_matrix {
     mkdir -p hdfs
 
     workflow-glue create_matrix \
-        ${chr} barcodes.tsv features.tsv \
-        --tsv_out summary.tsv \
-        --sa_tags_out sa_summary.tsv \
+        ${chr} barcodes.tsv.zst features.tsv.zst \
+        --tsv_out summary.tsv.zst \
+        --sa_tags_out sa_summary.tsv.zst \
         --hdf_out hdfs \
         --stats stats.json \
         ${opt_umi_length} \
@@ -57,6 +58,7 @@ process process_matrix {
         // mito per cell makes sense only for feature=gene for now.
         tuple val(meta), val(feature), path("${meta.alias}.gene_expression_mito_per_cell.tsv"), emit: mitocell, optional: true
         tuple val(meta), val(feature), path("${meta.alias}.${feature}_expression_umap*.tsv"), emit: umap
+        tuple val(meta), path('status.json'), emit: status
     script:
     def mito_prefixes = params.mito_prefix.replaceAll(',', ' ')
     def opt_seq_sat = feature == 'gene' ?  "--seq_saturation seq_saturation.tsv --gene_saturation gene_saturation.tsv" : ""
@@ -78,7 +80,7 @@ process process_matrix {
         --mito_prefixes $mito_prefixes \
         --norm_count $params.matrix_norm_count \
         --enable_umap \
-        --replicates 3 \
+        --replicates $params.umap_n_repeats \
         --sample "${meta.alias}" \
         $opt_seq_sat
     """
@@ -114,20 +116,25 @@ process merge_transcriptome {
 
 
 process combine_final_tag_files {
-    // Create final per-sample read summaries with information from all stages
+    // Create final per-sample read summaries with information from all stages.
+    // Leave uncomporessed as this will be for users
     label "singlecell"
     cpus 1
     memory "1 GB"
     publishDir "${params.out_dir}/${meta.alias}", mode: 'copy'
     input:
         tuple val(meta),
-              path("tags*.tsv")
+              path("tags*.tsv.zst")
     output:
         tuple val(meta),
               path("${meta.alias}.read_summary.tsv")
     script:
     """
-    awk 'FNR>1 || NR==1' *.tsv > "${meta.alias}.read_summary.tsv"
+    zstdcat *.tsv.zst | awk '
+        NR==1 { header=\$0; print; next }  # Save and print first header
+        \$0==header { next }               # Skip subsequent headers
+        { print }
+    ' > "${meta.alias}.read_summary.tsv"
     """
 }
 
@@ -161,8 +168,8 @@ process tag_bam {
         tuple val(meta),
               path('align.bam'),
               path('align.bam.bai'),
-              path('tags/tag_*.tsv'),
-              path('sa_tags/sa_tag_*.tsv')
+              path('tags/tag_*.tsv.zst'),
+              path('sa_tags/sa_tag_*.tsv.zst')
     output:
          tuple val(meta),
                path("${meta.alias}.tagged.bam"),
@@ -232,6 +239,11 @@ workflow process_bams {
         // Emit sperately for use in the report
         // TODO: it shouldn't be the concern of this process what goes in the report
         //       instead just collate everything possible per sample
+        
+        // If other processes should want to output a status, 
+        // they can be collected here into a single emission.
+        status = process_matrix.out.status
+       
         final_read_tags = final_read_tags
         tagged_bam = tag_bam.out.tagged_bam
         matrix_stats = process_matrix.out.stats
@@ -257,8 +269,8 @@ workflow process_bams {
             .map{it->[it[0], it[2]]}
         umap_matrices = process_matrix.out.umap
             .map{it->[it[0], it[2]]}
-            .groupTuple(size:2)
-            .map{key, files -> [key, files.flatten()]}
+            .groupTuple()
+            .map {meta, files -> [meta, files.flatten()]}
         seq_saturation = process_matrix.out.seq_saturation
             .filter{it[1] == "gene"}
             .map{_meta, _feature, files -> files}

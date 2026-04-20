@@ -47,13 +47,13 @@ process assign_barcodes{
     input:
          tuple val(meta),
                path("whitelist.tsv"),
-               path("extract_barcodes.tsv")
+               path("extract_barcodes.tsv.zst")
     output:
         tuple val(meta),
               path("bc_assign_counts.tsv"),
               emit: chrom_assigned_barcode_counts
         tuple val(meta),
-              path("extract_barcodes_with_bc.tsv"),
+              path("extract_barcodes_with_bc.tsv.zst"),
               emit: tags
         tuple val(meta),
               path("summary.tsv"),
@@ -61,8 +61,8 @@ process assign_barcodes{
     script:
     """
     workflow-glue assign_barcodes \
-        whitelist.tsv extract_barcodes.tsv \
-        extract_barcodes_with_bc.tsv bc_assign_counts.tsv summary.tsv \
+        whitelist.tsv extract_barcodes.tsv.zst \
+        extract_barcodes_with_bc.tsv.zst bc_assign_counts.tsv summary.tsv \
         --max_ed ${params.barcode_max_ed} \
         --min_ed_diff ${params.barcode_min_ed_diff} \
         --use_kmer_index
@@ -102,7 +102,10 @@ workflow correct_10x_barcodes {
         // Combine the tag chunks to per chrom chunks and emit [meta, chr, tags]
         chr_tags = cat_tags_by_chrom(assign_barcodes.out.tags.groupTuple())
             .transpose()
-            .map {meta, file -> [meta, file.baseName, file]}
+            .map { meta, tags -> 
+                def chr = tags.name.replaceFirst(/\.tsv\.zst$/, '')
+                [ meta, chr, tags ]
+            }
 
     emit:
         chr_tags = chr_tags

@@ -152,7 +152,7 @@ def main(args):
     # Write dataframe header to file
     pd.DataFrame(
         columns=['gene', 'transcript']).to_csv(
-        args.output, sep='\t', header=True)
+        args.output, sep='\t', header=True, compression='zstd')
 
     logger.info(f"Processing BAM with chunks size {args.chunksize}.")
     total_alignments = 0
@@ -271,7 +271,8 @@ def main(args):
             (df_assigned.gene != '-') | (df_assigned.transcript != '-')]
         df_assigned.set_index('read_id', drop=True, inplace=True)
         df_assigned = df_assigned.fillna('-')[['gene', 'transcript']]
-        df_assigned.to_csv(args.output, mode='a', sep='\t', header=False)
+        df_assigned.to_csv(
+            args.output, mode='a', sep='\t', header=False, compression='zstd')
 
         logger.info(f"Processed {total_alignments} alignments.")
     logger.info("Finished.")

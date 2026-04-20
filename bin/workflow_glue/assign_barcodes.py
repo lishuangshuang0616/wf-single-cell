@@ -173,9 +173,8 @@ def process_records(
     output_cols = [
         'read_id', 'CR', 'CY', 'UR', 'UY', 'chr',
         'start', 'end', 'mapq', 'CB', 'SA']
-    with open(tags_output, 'w') as fh:
-        fh.write("\t".join(output_cols))
-        fh.write("\n")
+    pd.DataFrame(columns=output_cols).to_csv(
+        tags_output, sep='\t', header=True, index=False, compression='zstd')
 
     total_reads = 0
     assignment_log = collections.Counter()
@@ -196,7 +195,8 @@ def process_records(
             f"Removed {n_records - len(df_tags)} reads without a corrected barcode.")
         if len(df_tags) != 0:
             df_tags[output_cols].to_csv(
-                tags_output, mode='a', sep='\t', header=None, index=False)
+                tags_output, mode='a', sep='\t', header=None,
+                index=False, compression='zstd')
             barcode_counter.update(df_tags["CB"])
 
     return barcode_counter, assignment_log

@@ -69,34 +69,91 @@ process call_paftools {
 process cat_tags_by_chrom {
     // Merge per-chunk tags to create per-chromosome tags
     label "wf_common"
-    cpus params.threads
-    memory "8 GB"
+    cpus 4
+    memory "12 GB"
     input:
         tuple val(meta),
-              path('tags/*tags.tsv')
+              path('tags/*tags.tsv.zst')
     output:
-         tuple val(meta),
+        tuple val(meta),
               path("chr_tags/*"),
-              emit: merged_tags
+              emit: tags
+        
+    script:
+        def tmpdir = "tmpdir"
+        def buffer_size = "8192M"
+        def sort_threads = 4
+    """
+    mkdir -p chr_tags
+    mkdir -p ${tmpdir}
+    
+    first_file=\$(ls tags/*.tsv.zst | head -n1)
+    [ -z "\$first_file" ] && { echo "No input files" >&2; exit 1; }
+    
+    # Get header from first line of first zstd file
+    # head -n1 stops after first line and closes its stdin; zstdcat then receives SIGPIPE (exit 141).
+    # So treat 141 as normal; any other non‑zero exit code is a real error.
+    header=\$( (zstdcat "\$first_file" | head -n1) 2>&1 ) || {
+        status=\$?
+        if [ "\$status" -ne 141 ]; then
+            echo "Error reading header: exit \$status" >&2
+            exit "\$status"
+        fi
+    }
+    [ -z "\$header" ] && { echo "Empty header" >&2; exit 1; }
+    
+    # Find chr column
+    CHR_COL=\$(awk -F'\\t' '{for(i=1;i<=NF;i++) if(\$i=="chr"){print i; exit}}' <<< "\$header")
+    CB_COL=\$(awk -F'\\t' '{for(i=1;i<=NF;i++) if(\$i=="CB"){print i; exit}}' <<< "\$header")
+    [ -z "\$CHR_COL" ] && { echo "No chr column" >&2; exit 1; }
+    [ -z "\$CB_COL" ] && { echo "No CB column" >&2; exit 1; }
+    
+    # Split by chromosome
+    find tags -name '*.tsv.zst' -exec zstdcat {} + | \\
+        awk -F'\\t' -v CHR_COL="\$CHR_COL" -v hdr="\$header" '
+            BEGIN { split(hdr, h, FS); first_col = h[1] }
+            \$1 == first_col { next }  # Skip headers
+            {
+                chr = \$CHR_COL
+                out = "chr_tags/" chr ".tsv"
+                if (!(seen[chr]++)) print hdr > out
+                print > out
+            }
+        '
+    
+    # Sort by corrected cell barcode so downstream processess can read contiguous CB blocks.
+    find -L chr_tags -name "*.tsv" -type f | while read -r file; do
+        head -n 1 "\$file" | zstd -3 > "\${file}.zst"
+        tail -n +2 "\$file" \
+            | sort \
+                --buffer-size=${buffer_size} \
+                --temporary-directory=${tmpdir} \
+                --parallel=${sort_threads} \
+                --field-separator=\$'\\t' \
+                --key=\${CB_COL},\${CB_COL} \
+            | zstd -3 >> "\${file}.zst"
+            rm \${file}
+    done
+    rm -rf ${tmpdir}
+    """
 
+}
+
+process split_gtf_by_chroms {
+    label "singlecell"
+    cpus 1
+    memory "1 GB"
+    input:
+        path(ref_gtf)
+    output:
+        path("*.gtf"), emit: chrom_gtf
     script:
     """
-    mkdir chr_tags
-    # Find the chr column number
-    files=(tags/*)
-    chr_col=\$(awk -v RS='\t' '/chr/{print NR; exit}' "\${files[0]}")
-
-    # merge the tags TSVs, keep header from first file and split entries by chromosome
-    awk -F'\t' -v chr_col=\$chr_col 'FNR==1{hdr=\$0; next} \
-    {if (!seen[\$chr_col]++) \
-        print hdr>"chr_tags/"\$chr_col".tsv"; \
-        print>"chr_tags/"\$chr_col".tsv"}' tags/*
-
-    # Sort by corrected barcode to allow chunked reading later.
-    for file in chr_tags/*.tsv;
-    do
-        csvtk sort -t --keys CB "\$file" -o tmp.tsv;
-        mv tmp.tsv "\$file";
-    done
+    if [[ "${ref_gtf}" == *.gz ]]; then
+        cat_cmd="zcat" 
+    else
+        cat_cmd="cat"
+        fi
+    \${cat_cmd} ${ref_gtf} | awk '/^[^#]/ {print>\$1".gtf"}'
     """
 }

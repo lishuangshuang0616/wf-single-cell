@@ -22,7 +22,7 @@ process call_adapter_scan {
         path "ref_genes.bed"
     output:
         tuple val(meta), path("adapters.json"), emit: adapter_summary
-        tuple val(meta), path("read_tags.tsv"), emit: read_tags
+        tuple val(meta), path("read_tags.tsv.zst"), emit: read_tags
         tuple val(meta), path("high_quality_bc_counts.tsv"), emit: barcode_counts
         tuple val(meta), path("sorted.bam"), path("sorted.bam.bai"), emit: bam_sort
         tuple val(meta), path("bamstats.tsv"), emit: bam_stats
@@ -53,7 +53,7 @@ process call_adapter_scan {
         --min_barcode_qv $params.barcode_min_quality \
         --barcode_length ${meta['barcode_length']} \
         --umi_length ${meta['umi_length']} \
-        --output_read_tags "bc_extract.tsv" \
+        --output_read_tags "bc_extract.tsv.zst" \
         --output_barcode_counts "high_quality_bc_counts.tsv" \
     | minimap2 -ax splice -uf --MD \
         -t $mm2_threads -K 10M \
@@ -71,18 +71,18 @@ process call_adapter_scan {
     # TODO: improve this with pipes?
     csvtk cut -tlf Read,Pos,EndPos,Ref,MapQual bam_info.tsv > bam_info_cut.tsv
     # Left join of barcode
-    csvtk join -tlf 1 bam_info_cut.tsv bc_extract.tsv --left-join \
+    zstdcat bc_extract.tsv.zst | csvtk join -tlf 1 bam_info_cut.tsv -  --left-join \
         | csvtk rename -tl -f Read,Pos,EndPos,Ref,MapQual -n read_id,start,end,chr,mapq -o read_tags_interim.tsv
 
     # Merge the SA column with the read tags on read_id
     if [ \$(wc -l < SA_tags.tsv) -eq 1 ]; then
         echo "No SA tags found"
         # Add an empty SA column
-        csvtk mutate2 -t -n 'SA' -e " '' " read_tags_interim.tsv > read_tags.tsv
+        csvtk mutate2 -t -n 'SA' -e " '' " read_tags_interim.tsv | zstd > read_tags.tsv.zst
     else
-        csvtk -t uniq SA_tags.tsv | csvtk join -t --left-join --fields read_id read_tags_interim.tsv - > read_tags.tsv
+        csvtk -t uniq SA_tags.tsv | csvtk join -t --left-join --fields read_id read_tags_interim.tsv - | zstd > read_tags.tsv.zst
     fi
-    rm bam_info.tsv bam_info_cut.tsv bc_extract.tsv read_tags_interim.tsv
+    rm bam_info.tsv bam_info_cut.tsv bc_extract.tsv.zst read_tags_interim.tsv
     """
 }
 

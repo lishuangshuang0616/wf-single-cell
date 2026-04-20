@@ -58,12 +58,6 @@ def main(args):
                     val = record.get_tag(tag)
                     if tag == 'CB':
                         barcode_counter[val] += 1
-                    # Quote double quaotes in quality strings
-                    # For now just report ?
-                    if tag in ['CY', 'UY']:
-                        # val = val.replace('"', '""')
-                        # val = f'"{val}"'
-                        val = "?" * 8
                 else:
                     val = '-'
                 tag_values.append(val)
